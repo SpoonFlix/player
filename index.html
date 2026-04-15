@@ -1,21 +1,18 @@
 <!doctype html>
 <html lang="en">
 <head>
-	<meta charset="utf-8" />
-	<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-	<meta http-equiv="Pragma" content="no-cache" />
-	<meta http-equiv="Expires" content="0" />
-	<title>Media Player</title>
-	<style>
-		*{margin:0;padding:0;box-sizing:border-box}
-		html,body{width:100%;height:100%;overflow:hidden;background:#000}
-		iframe{width:100%;height:100%;border:none;position:fixed;top:0;left:0}
-		#error{display:none;position:fixed;top:0;left:0;width:100%;height:100%;
-			background:#111;color:#888;font-family:sans-serif;
-			justify-content:center;align-items:center;flex-direction:column;text-align:center}
-		#error.show{display:flex}
-		#error h2{color:#ccc;margin-bottom:8px}
-	</style>
+<meta charset="utf-8" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<style>
+	*{margin:0;padding:0}
+	html,body{width:100%;height:100%;overflow:hidden;background:#000}
+	iframe{width:100vw;height:100vh;border:none;position:fixed;top:0;left:0}
+	#error{display:none;position:fixed;top:0;left:0;width:100%;height:100%;
+		background:#111;color:#888;font-family:sans-serif;
+		justify-content:center;align-items:center;flex-direction:column;text-align:center;z-index:10}
+	#error.show{display:flex}
+	#error h2{color:#ccc;margin-bottom:8px}
+</style>
 </head>
 <body>
 <div id="error"><h2>Video Unavailable</h2><p id="error-msg"></p></div>
@@ -25,6 +22,7 @@
 
 	var iframe = null;
 	var currentVideoId = '';
+	var currentVol = 0.5;
 
 	function getHashParams() {
 		var h = window.location.hash.substring(1);
@@ -34,54 +32,40 @@
 		return p;
 	}
 
-	function buildEmbedUrl(videoId, startTime) {
-		var params = [
-			'autoplay=1',
-			'mute=1',
-			'controls=0',
-			'disablekb=1',
-			'modestbranding=1',
-			'rel=0',
-			'showinfo=0',
-			'iv_load_policy=3',
-			'cc_load_policy=0',
-			'playsinline=1',
-			'enablejsapi=1',
-			'widgetid=1',
-			'origin=' + encodeURIComponent(window.location.origin)
-		];
-		if (startTime > 0) params.push('start=' + Math.floor(startTime));
-		return 'https://www.youtube.com/embed/' + videoId + '?' + params.join('&');
+	function buildSrc(videoId, startTime) {
+		return 'https://www.youtube.com/embed/' + videoId
+			+ '?autoplay=1&controls=0&disablekb=1&modestbranding=1&rel=0&showinfo=0'
+			+ '&iv_load_policy=3&cc_load_policy=0&playsinline=1&mute=1'
+			+ '&enablejsapi=1&origin=' + encodeURIComponent(window.location.origin)
+			+ (startTime > 0 ? '&start=' + Math.floor(startTime) : '');
 	}
 
 	function createPlayer(videoId, startTime, vol) {
 		currentVideoId = videoId;
+		currentVol = vol;
 		document.getElementById('error').className = '';
 
-		// Remove old iframe
 		if (iframe) { iframe.remove(); iframe = null; }
 
-		// Create iframe with explicit allow="autoplay" - this is the key
 		iframe = document.createElement('iframe');
-		iframe.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+		iframe.src = buildSrc(videoId, startTime);
+		iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+		iframe.allow = 'autoplay; fullscreen; encrypted-media';
 		iframe.allowFullscreen = true;
-		iframe.src = buildEmbedUrl(videoId, startTime);
+		iframe.style.cssText = 'width:100vw;height:100vh;border:none;position:fixed;top:0;left:0';
 		document.body.appendChild(iframe);
 
-		// Once loaded, send commands via postMessage (YouTube iframe API)
 		iframe.onload = function() {
-			// Unmute and set volume after a short delay
-			setTimeout(function() { sendCommand('unMute'); }, 1000);
-			setTimeout(function() { sendCommand('setVolume', [vol * 100]); }, 1200);
-			// Keep trying to unmute
-			setTimeout(function() { sendCommand('unMute'); }, 3000);
-			setTimeout(function() { sendCommand('setVolume', [vol * 100]); }, 3200);
+			// Register to receive YouTube state events
+			registerListener();
+			// Unmute and set volume after YouTube player initializes
+			setTimeout(function() { cmd('unMute'); cmd('setVolume', [vol * 100]); }, 1500);
+			setTimeout(function() { cmd('unMute'); cmd('setVolume', [vol * 100]); }, 3000);
 		};
 	}
 
-	// YouTube iframe API uses postMessage for control
-	// Format: {"event":"command","func":"funcName","args":[...]}
-	function sendCommand(func, args) {
+	// Send a command to the YouTube player via postMessage
+	function cmd(func, args) {
 		if (!iframe || !iframe.contentWindow) return;
 		try {
 			iframe.contentWindow.postMessage(JSON.stringify({
@@ -92,34 +76,8 @@
 		} catch(e) {}
 	}
 
-	// Listen for YouTube player state messages
-	window.addEventListener('message', function(e) {
-		if (!e.data || typeof e.data !== 'string') return;
-		try {
-			var data = JSON.parse(e.data);
-			// YouTube sends info events we can read
-			if (data.event === 'onError') {
-				var errors = {
-					2: 'Invalid video ID',
-					5: 'Cannot play in embedded player',
-					100: 'Video not found or private',
-					101: 'Embedding not allowed',
-					150: 'Embedding not allowed'
-				};
-				document.getElementById('error-msg').textContent =
-					errors[data.info] || 'Error ' + data.info;
-				document.getElementById('error').className = 'show';
-			}
-			// If video ended, seek to start and pause
-			if (data.event === 'onStateChange' && data.info === 0) {
-				sendCommand('seekTo', [0, true]);
-				sendCommand('pauseVideo');
-			}
-		} catch(e) {}
-	});
-
-	// Also register to receive YouTube events
-	function listenForEvents() {
+	// Tell YouTube to send us state change events
+	function registerListener() {
 		if (!iframe || !iframe.contentWindow) return;
 		try {
 			iframe.contentWindow.postMessage(JSON.stringify({
@@ -130,7 +88,31 @@
 		} catch(e) {}
 	}
 
-	// Hash-change handler for S&box commands
+	// Listen for YouTube player events
+	window.addEventListener('message', function(e) {
+		if (!e.data || typeof e.data !== 'string') return;
+		try {
+			var data = JSON.parse(e.data);
+
+			// Error
+			if (data.event === 'onError') {
+				var errors = {
+					2:'Invalid video ID', 5:'Cannot play in embedded player',
+					100:'Video not found or private', 101:'Embedding blocked', 150:'Embedding blocked'
+				};
+				document.getElementById('error-msg').textContent = errors[data.info] || 'Error ' + data.info;
+				document.getElementById('error').className = 'show';
+			}
+
+			// Video ended — seek to start and pause instead of showing replay UI
+			if (data.event === 'onStateChange' && data.info === 0) {
+				cmd('seekTo', [0, true]);
+				cmd('pauseVideo');
+			}
+		} catch(e) {}
+	});
+
+	// Hash-change handler — S&box sends commands by changing the URL hash
 	window.addEventListener('hashchange', function() {
 		var p = getHashParams();
 		if (!p.v) return;
@@ -145,38 +127,34 @@
 		if (p.vol !== undefined) {
 			var vol = parseFloat(p.vol);
 			if (!isNaN(vol)) {
-				sendCommand('unMute');
-				sendCommand('setVolume', [vol * 100]);
+				cmd('unMute');
+				cmd('setVolume', [vol * 100]);
+				currentVol = vol;
 			}
 		}
 
-		// Commands
 		switch(p.cmd) {
-			case 'pause': sendCommand('pauseVideo'); break;
-			case 'play': sendCommand('playVideo'); break;
-			case 'seek': sendCommand('seekTo', [parseFloat(p.t)||0, true]); break;
+			case 'pause': cmd('pauseVideo'); break;
+			case 'play':  cmd('playVideo');  break;
+			case 'seek':  cmd('seekTo', [parseFloat(p.t)||0, true]); break;
 			case 'sync':
-				var expected = parseFloat(p.t) || 0;
+				// Sync: ensure correct play/pause state and seek to expected time
 				if (p.paused === '1') {
-					sendCommand('pauseVideo');
+					cmd('pauseVideo');
 				} else {
-					sendCommand('playVideo');
+					cmd('playVideo');
 				}
-				// We can't read current time to check drift, so always seek
-				// The YouTube player handles redundant seeks gracefully
-				sendCommand('seekTo', [expected, true]);
+				cmd('seekTo', [parseFloat(p.t)||0, true]);
 				break;
 		}
 	});
 
+	// Keep re-registering for events (in case iframe reloads internally)
+	setInterval(registerListener, 3000);
+
 	// Initial load
 	var p = getHashParams();
-	if (p.v) {
-		createPlayer(p.v, parseFloat(p.t)||0, parseFloat(p.vol)||0.5);
-	}
-
-	// Periodically register for events
-	setInterval(listenForEvents, 2000);
+	if (p.v) createPlayer(p.v, parseFloat(p.t)||0, parseFloat(p.vol)||0.5);
 })();
 </script>
 </body>
