@@ -2,80 +2,73 @@
 <html lang="en">
 <head>
 	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width,initial-scale=1" />
 	<title>S&amp;box Media Player</title>
 	<style>
-		html, body {
-			margin: 0; padding: 0;
-			width: 100%; height: 100%;
-			overflow: hidden; background: #000;
-		}
+		html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
 		#player-container { width: 100%; height: 100%; position: fixed; top: 0; left: 0; }
+		#error { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #111; color: #888; font-family: sans-serif; justify-content: center; align-items: center; flex-direction: column; text-align: center; }
+		#error.show { display: flex; }
+		#error h2 { color: #ccc; margin-bottom: 8px; }
 	</style>
 </head>
 <body>
 <div id="player-container"></div>
+<div id="error"><h2>Video Unavailable</h2><p id="error-msg"></p></div>
 <script>
 /*
  * S&box Media Player Wrapper
- *
- * S&box's WebSurface (Steam HTML Surface) cannot execute JavaScript directly.
- * Instead, the game communicates by changing the URL hash. This page listens
- * for hashchange events and parses commands from the fragment.
- *
- * Hash format:  #v={videoId}&t={seconds}&vol={0-1}&cmd={play|pause|seek}
- *
- * On initial load, reads v + t from the hash and autoplays.
- * On hash change, reads cmd + parameters and acts accordingly.
+ * Communicates via URL hash changes (Steam CEF has no JS injection API).
+ * Hash: #v={id}&t={sec}&vol={0-1}&paused={0|1}&cmd={play|pause|seek|sync|vol}
  */
 
 function getHashParams() {
-	const hash = window.location.hash.substring(1);
+	var hash = window.location.hash.substring(1);
 	if (!hash) return {};
-	const params = {};
-	new URLSearchParams(hash).forEach((val, key) => { params[key] = val; });
-	return params;
+	var p = {};
+	new URLSearchParams(hash).forEach(function(v, k) { p[k] = v; });
+	return p;
 }
 
-// ── YouTube IFrame API ──
-const tag = document.createElement('script');
+var tag = document.createElement('script');
 tag.src = 'https://www.youtube.com/iframe_api';
 document.head.appendChild(tag);
 
-let player = null;
-let currentVideoId = '';
-let isReady = false;
+var player = null;
+var currentVideoId = '';
+var isReady = false;
 
-const playerVars = {
-	controls: 0,
-	rel: 0,
-	loop: 0,
-	disablekb: 1,
-	enablejsapi: 1,
-	muted: 1,
-	cc_load_policy: 0,
-	iv_load_policy: 3,
-	autoplay: 1
+var YT_ERRORS = {
+	2: 'Invalid video ID format',
+	5: 'Cannot play in embedded player',
+	100: 'Video not found, private, or removed',
+	101: 'Video owner blocked embedding',
+	150: 'Video owner blocked embedding'
 };
 
-function onYouTubeIframeAPIReady() {
-	const p = getHashParams();
-	const vid = p.v || '';
-	const startTime = parseFloat(p.t) || 0;
-	const vol = parseFloat(p.vol);
-
-	if (vid) {
-		createPlayer(vid, startTime, isNaN(vol) ? 0.5 : vol);
-	}
+function showError(msg) {
+	document.getElementById('error-msg').textContent = msg;
+	document.getElementById('error').className = 'show';
+	document.getElementById('player-container').style.display = 'none';
 }
 
-function createPlayer(videoId, startTime, initialVolume) {
+function hideError() {
+	document.getElementById('error').className = '';
+	document.getElementById('player-container').style.display = 'block';
+}
+
+function onYouTubeIframeAPIReady() {
+	var p = getHashParams();
+	if (p.v) createPlayer(p.v, parseFloat(p.t) || 0, parseFloat(p.vol) || 0.5);
+}
+
+function createPlayer(videoId, startTime, vol) {
 	currentVideoId = videoId;
+	isReady = false;
+	hideError();
 
 	if (player && typeof player.destroy === 'function') {
 		player.destroy();
 		player = null;
-		isReady = false;
 		document.getElementById('player-container').innerHTML = '';
 	}
 
@@ -83,103 +76,121 @@ function createPlayer(videoId, startTime, initialVolume) {
 		height: '100%',
 		width: '100%',
 		videoId: videoId,
-		playerVars: { ...playerVars, start: Math.floor(startTime) },
-		host: 'https://www.youtube-nocookie.com',
+		playerVars: {
+			autoplay: 1,
+			controls: 0,
+			disablekb: 1,
+			modestbranding: 1,
+			rel: 0,
+			showinfo: 0,
+			mute: 1,
+			enablejsapi: 1,
+			cc_load_policy: 0,
+			iv_load_policy: 3,
+			playsinline: 1,
+			start: Math.floor(startTime),
+			origin: window.location.origin
+		},
 		events: {
-			onReady: function () {
+			onReady: function() {
 				isReady = true;
-				player.unloadModule('captions');
-				player.setVolume(0);
 
-				if (startTime > 0) {
-					player.seekTo(startTime, true);
-				}
+				try { player.unloadModule('captions'); } catch(e) {}
 
-				// Apply initial volume after a short delay to let unmute work
-				setTimeout(function () {
-					if (player && player.isMuted) {
-						player.unMute();
-					}
-					player.setVolume((initialVolume || 0.5) * 100);
-				}, 500);
+				// Aggressively start playback
+				player.playVideo();
+				player.unMute();
+				player.setVolume(vol * 100);
+
+				// Keep retrying play in case browser policy blocks it
+				var retries = [200, 500, 1000, 2000, 4000];
+				retries.forEach(function(ms) {
+					setTimeout(function() {
+						if (!player || !isReady) return;
+						try {
+							var state = player.getPlayerState();
+							if (state !== 1 && state !== 3) { // not PLAYING and not BUFFERING
+								player.playVideo();
+							}
+						} catch(e) {}
+					}, ms);
+				});
 			},
-			onStateChange: function () { /* no-op */ },
-			onError: function (e) {
-				console.log('YT_ERROR:' + e.data);
+			onStateChange: function(e) {
+				if (e.data === YT.PlayerState.ENDED) {
+					// Pause at start instead of showing replay UI
+					player.seekTo(0, true);
+					player.pauseVideo();
+				}
+			},
+			onError: function(e) {
+				showError(YT_ERRORS[e.data] || 'Error loading video (code ' + e.data + ')');
 			}
 		}
 	});
 }
 
-// ── Hash-change command handler ──
-// This is how S&box sends commands: it changes the URL hash.
-window.addEventListener('hashchange', function () {
-	if (!isReady || !player) return;
+// Hash-change command handler
+window.addEventListener('hashchange', function() {
+	var p = getHashParams();
+	if (!p.v) return;
 
-	const p = getHashParams();
-
-	// New video requested
-	if (p.v && p.v !== currentVideoId) {
-		const t = parseFloat(p.t) || 0;
-		const vol = parseFloat(p.vol);
-		createPlayer(p.v, t, isNaN(vol) ? 0.5 : vol);
+	// New video
+	if (p.v !== currentVideoId) {
+		createPlayer(p.v, parseFloat(p.t) || 0, parseFloat(p.vol) || 0.5);
 		return;
 	}
 
+	if (!isReady || !player) return;
+
 	// Volume
 	if (p.vol !== undefined) {
-		const vol = parseFloat(p.vol);
+		var vol = parseFloat(p.vol);
 		if (!isNaN(vol)) {
-			if (player.isMuted()) player.unMute();
-			player.setVolume(vol * 100);
+			try {
+				if (player.isMuted()) player.unMute();
+				player.setVolume(vol * 100);
+			} catch(e) {}
 		}
 	}
 
-	// Commands
 	switch (p.cmd) {
 		case 'pause':
-			player.pauseVideo();
+			try { player.pauseVideo(); } catch(e) {}
 			break;
-
 		case 'play':
-			player.playVideo();
+			try { player.playVideo(); } catch(e) {}
 			break;
-
 		case 'seek':
-			var seekTime = parseFloat(p.t) || 0;
-			player.seekTo(seekTime, true);
+			try { player.seekTo(parseFloat(p.t) || 0, true); } catch(e) {}
 			break;
-
 		case 'sync':
-			// Sync check: if drift > threshold, force seek
-			var expected = parseFloat(p.t) || 0;
-			var current = player.getCurrentTime();
-			var diff = Math.abs(current - expected);
-			var threshold = (p.paused === '1') ? 2 : 5;
-			if (diff > threshold) {
-				player.seekTo(expected, true);
-			}
-			// Ensure correct play/pause state
-			if (p.paused === '1') {
-				if (player.getPlayerState() === YT.PlayerState.PLAYING) {
-					player.pauseVideo();
+			try {
+				var expected = parseFloat(p.t) || 0;
+				var current = player.getCurrentTime();
+				var diff = Math.abs(current - expected);
+				var threshold = (p.paused === '1') ? 2 : 5;
+
+				if (diff > threshold) {
+					player.seekTo(expected, true);
 				}
-			} else {
-				if (player.getPlayerState() !== YT.PlayerState.PLAYING) {
-					player.playVideo();
+
+				var state = player.getPlayerState();
+				if (p.paused === '1') {
+					if (state === YT.PlayerState.PLAYING) player.pauseVideo();
+				} else {
+					if (state !== YT.PlayerState.PLAYING && state !== YT.PlayerState.BUFFERING) {
+						player.playVideo();
+					}
 				}
-			}
+			} catch(e) {}
 			break;
 	}
 });
 
-// Handle edge case if API already loaded
 if (window.YT && window.YT.Player && !player) {
-	if (document.readyState === 'complete') {
-		onYouTubeIframeAPIReady();
-	} else {
-		window.addEventListener('load', onYouTubeIframeAPIReady);
-	}
+	if (document.readyState === 'complete') onYouTubeIframeAPIReady();
+	else window.addEventListener('load', onYouTubeIframeAPIReady);
 }
 </script>
 </body>
