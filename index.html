@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width,initial-scale=1" />
+	<title>S&amp;box Media Player</title>
+	<style>
+		html, body {
+			margin: 0; padding: 0;
+			width: 100%; height: 100%;
+			overflow: hidden; background: #000;
+		}
+		#player-container { width: 100%; height: 100%; position: fixed; top: 0; left: 0; }
+	</style>
+</head>
+<body>
+<div id="player-container"></div>
+<script>
+/*
+ * S&box Media Player Wrapper
+ *
+ * S&box's WebSurface (Steam HTML Surface) cannot execute JavaScript directly.
+ * Instead, the game communicates by changing the URL hash. This page listens
+ * for hashchange events and parses commands from the fragment.
+ *
+ * Hash format:  #v={videoId}&t={seconds}&vol={0-1}&cmd={play|pause|seek}
+ *
+ * On initial load, reads v + t from the hash and autoplays.
+ * On hash change, reads cmd + parameters and acts accordingly.
+ */
+
+function getHashParams() {
+	const hash = window.location.hash.substring(1);
+	if (!hash) return {};
+	const params = {};
+	new URLSearchParams(hash).forEach((val, key) => { params[key] = val; });
+	return params;
+}
+
+// ── YouTube IFrame API ──
+const tag = document.createElement('script');
+tag.src = 'https://www.youtube.com/iframe_api';
+document.head.appendChild(tag);
+
+let player = null;
+let currentVideoId = '';
+let isReady = false;
+
+const playerVars = {
+	controls: 0,
+	rel: 0,
+	loop: 0,
+	disablekb: 1,
+	enablejsapi: 1,
+	muted: 1,
+	cc_load_policy: 0,
+	iv_load_policy: 3,
+	autoplay: 1
+};
+
+function onYouTubeIframeAPIReady() {
+	const p = getHashParams();
+	const vid = p.v || '';
+	const startTime = parseFloat(p.t) || 0;
+	const vol = parseFloat(p.vol);
+
+	if (vid) {
+		createPlayer(vid, startTime, isNaN(vol) ? 0.5 : vol);
+	}
+}
+
+function createPlayer(videoId, startTime, initialVolume) {
+	currentVideoId = videoId;
+
+	if (player && typeof player.destroy === 'function') {
+		player.destroy();
+		player = null;
+		isReady = false;
+		document.getElementById('player-container').innerHTML = '';
+	}
+
+	player = new YT.Player('player-container', {
+		height: '100%',
+		width: '100%',
+		videoId: videoId,
+		playerVars: { ...playerVars, start: Math.floor(startTime) },
+		host: 'https://www.youtube-nocookie.com',
+		events: {
+			onReady: function () {
+				isReady = true;
+				player.unloadModule('captions');
+				player.setVolume(0);
+
+				if (startTime > 0) {
+					player.seekTo(startTime, true);
+				}
+
+				// Apply initial volume after a short delay to let unmute work
+				setTimeout(function () {
+					if (player && player.isMuted) {
+						player.unMute();
+					}
+					player.setVolume((initialVolume || 0.5) * 100);
+				}, 500);
+			},
+			onStateChange: function () { /* no-op */ },
+			onError: function (e) {
+				console.log('YT_ERROR:' + e.data);
+			}
+		}
+	});
+}
+
+// ── Hash-change command handler ──
+// This is how S&box sends commands: it changes the URL hash.
+window.addEventListener('hashchange', function () {
+	if (!isReady || !player) return;
+
+	const p = getHashParams();
+
+	// New video requested
+	if (p.v && p.v !== currentVideoId) {
+		const t = parseFloat(p.t) || 0;
+		const vol = parseFloat(p.vol);
+		createPlayer(p.v, t, isNaN(vol) ? 0.5 : vol);
+		return;
+	}
+
+	// Volume
+	if (p.vol !== undefined) {
+		const vol = parseFloat(p.vol);
+		if (!isNaN(vol)) {
+			if (player.isMuted()) player.unMute();
+			player.setVolume(vol * 100);
+		}
+	}
+
+	// Commands
+	switch (p.cmd) {
+		case 'pause':
+			player.pauseVideo();
+			break;
+
+		case 'play':
+			player.playVideo();
+			break;
+
+		case 'seek':
+			var seekTime = parseFloat(p.t) || 0;
+			player.seekTo(seekTime, true);
+			break;
+
+		case 'sync':
+			// Sync check: if drift > threshold, force seek
+			var expected = parseFloat(p.t) || 0;
+			var current = player.getCurrentTime();
+			var diff = Math.abs(current - expected);
+			var threshold = (p.paused === '1') ? 2 : 5;
+			if (diff > threshold) {
+				player.seekTo(expected, true);
+			}
+			// Ensure correct play/pause state
+			if (p.paused === '1') {
+				if (player.getPlayerState() === YT.PlayerState.PLAYING) {
+					player.pauseVideo();
+				}
+			} else {
+				if (player.getPlayerState() !== YT.PlayerState.PLAYING) {
+					player.playVideo();
+				}
+			}
+			break;
+	}
+});
+
+// Handle edge case if API already loaded
+if (window.YT && window.YT.Player && !player) {
+	if (document.readyState === 'complete') {
+		onYouTubeIframeAPIReady();
+	} else {
+		window.addEventListener('load', onYouTubeIframeAPIReady);
+	}
+}
+</script>
+</body>
+</html>
