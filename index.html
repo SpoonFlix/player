@@ -2,11 +2,16 @@
 <html lang="en">
 <head>
 	<meta charset="utf-8" />
+	<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+	<meta http-equiv="Pragma" content="no-cache" />
+	<meta http-equiv="Expires" content="0" />
 	<title>S&amp;box Media Player</title>
 	<style>
 		html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
 		#player-container { width: 100%; height: 100%; position: fixed; top: 0; left: 0; }
-		#error { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #111; color: #888; font-family: sans-serif; justify-content: center; align-items: center; flex-direction: column; text-align: center; }
+		#error { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+			background: #111; color: #888; font-family: sans-serif;
+			justify-content: center; align-items: center; flex-direction: column; text-align: center; }
 		#error.show { display: flex; }
 		#error h2 { color: #ccc; margin-bottom: 8px; }
 	</style>
@@ -15,183 +20,188 @@
 <div id="player-container"></div>
 <div id="error"><h2>Video Unavailable</h2><p id="error-msg"></p></div>
 <script>
-/*
- * S&box Media Player Wrapper
- * Communicates via URL hash changes (Steam CEF has no JS injection API).
- * Hash: #v={id}&t={sec}&vol={0-1}&paused={0|1}&cmd={play|pause|seek|sync|vol}
- */
+(function() {
+	'use strict';
 
-function getHashParams() {
-	var hash = window.location.hash.substring(1);
-	if (!hash) return {};
-	var p = {};
-	new URLSearchParams(hash).forEach(function(v, k) { p[k] = v; });
-	return p;
-}
-
-var tag = document.createElement('script');
-tag.src = 'https://www.youtube.com/iframe_api';
-document.head.appendChild(tag);
-
-var player = null;
-var currentVideoId = '';
-var isReady = false;
-
-var YT_ERRORS = {
-	2: 'Invalid video ID format',
-	5: 'Cannot play in embedded player',
-	100: 'Video not found, private, or removed',
-	101: 'Video owner blocked embedding',
-	150: 'Video owner blocked embedding'
-};
-
-function showError(msg) {
-	document.getElementById('error-msg').textContent = msg;
-	document.getElementById('error').className = 'show';
-	document.getElementById('player-container').style.display = 'none';
-}
-
-function hideError() {
-	document.getElementById('error').className = '';
-	document.getElementById('player-container').style.display = 'block';
-}
-
-function onYouTubeIframeAPIReady() {
-	var p = getHashParams();
-	if (p.v) createPlayer(p.v, parseFloat(p.t) || 0, parseFloat(p.vol) || 0.5);
-}
-
-function createPlayer(videoId, startTime, vol) {
-	currentVideoId = videoId;
-	isReady = false;
-	hideError();
-
-	if (player && typeof player.destroy === 'function') {
-		player.destroy();
-		player = null;
-		document.getElementById('player-container').innerHTML = '';
+	function getHashParams() {
+		var hash = window.location.hash.substring(1);
+		if (!hash) return {};
+		var p = {};
+		new URLSearchParams(hash).forEach(function(v, k) { p[k] = v; });
+		return p;
 	}
 
-	player = new YT.Player('player-container', {
-		height: '100%',
-		width: '100%',
-		videoId: videoId,
-		playerVars: {
-			autoplay: 1,
-			controls: 0,
-			disablekb: 1,
-			modestbranding: 1,
-			rel: 0,
-			showinfo: 0,
-			mute: 1,
-			enablejsapi: 1,
-			cc_load_policy: 0,
-			iv_load_policy: 3,
-			playsinline: 1,
-			start: Math.floor(startTime),
-			origin: window.location.origin
-		},
-		events: {
-			onReady: function() {
-				isReady = true;
+	var player = null;
+	var currentVideoId = '';
+	var isReady = false;
+	var hasPlayed = false;
 
-				try { player.unloadModule('captions'); } catch(e) {}
+	var YT_ERRORS = {
+		2: 'Invalid video ID format',
+		5: 'Cannot play in embedded player',
+		100: 'Video not found, private, or removed',
+		101: 'Video owner blocked embedding',
+		150: 'Video owner blocked embedding'
+	};
 
-				// Aggressively start playback
+	function showError(msg) {
+		document.getElementById('error-msg').textContent = msg;
+		document.getElementById('error').className = 'show';
+		document.getElementById('player-container').style.display = 'none';
+	}
+
+	function hideError() {
+		document.getElementById('error').className = '';
+		document.getElementById('player-container').style.display = 'block';
+	}
+
+	function forcePlay() {
+		if (!player || !isReady) return;
+		try {
+			var state = player.getPlayerState();
+			// -1=unstarted, 0=ended, 2=paused, 5=cued
+			if (state !== 1 && state !== 3) {
 				player.playVideo();
+			}
+			if (!hasPlayed) {
 				player.unMute();
-				player.setVolume(vol * 100);
+				hasPlayed = true;
+			}
+		} catch(e) {}
+	}
 
-				// Keep retrying play in case browser policy blocks it
-				var retries = [200, 500, 1000, 2000, 4000];
-				retries.forEach(function(ms) {
-					setTimeout(function() {
-						if (!player || !isReady) return;
-						try {
-							var state = player.getPlayerState();
-							if (state !== 1 && state !== 3) { // not PLAYING and not BUFFERING
-								player.playVideo();
-							}
-						} catch(e) {}
-					}, ms);
-				});
+	// KEY: Listen for ANY click/touch on the page.
+	// When S&box simulates a click via TellMouseButton, this fires
+	// and gives us "user gesture" context to call playVideo().
+	document.addEventListener('click', forcePlay, true);
+	document.addEventListener('mousedown', forcePlay, true);
+	document.addEventListener('pointerdown', forcePlay, true);
+	document.addEventListener('touchstart', forcePlay, true);
+
+	// Also keep retrying on a timer
+	setInterval(forcePlay, 1000);
+
+	// Load YouTube IFrame API
+	var tag = document.createElement('script');
+	tag.src = 'https://www.youtube.com/iframe_api';
+	document.head.appendChild(tag);
+
+	window.onYouTubeIframeAPIReady = function() {
+		var p = getHashParams();
+		if (p.v) createPlayer(p.v, parseFloat(p.t) || 0, parseFloat(p.vol) || 0.5);
+	};
+
+	function createPlayer(videoId, startTime, vol) {
+		currentVideoId = videoId;
+		isReady = false;
+		hasPlayed = false;
+		hideError();
+
+		if (player && typeof player.destroy === 'function') {
+			player.destroy();
+			player = null;
+			document.getElementById('player-container').innerHTML = '';
+		}
+
+		player = new YT.Player('player-container', {
+			height: '100%',
+			width: '100%',
+			videoId: videoId,
+			playerVars: {
+				autoplay: 1,
+				controls: 0,
+				disablekb: 1,
+				modestbranding: 1,
+				rel: 0,
+				showinfo: 0,
+				mute: 1,
+				enablejsapi: 1,
+				cc_load_policy: 0,
+				iv_load_policy: 3,
+				playsinline: 1,
+				start: Math.floor(startTime),
+				origin: window.location.origin
 			},
-			onStateChange: function(e) {
-				if (e.data === YT.PlayerState.ENDED) {
-					// Pause at start instead of showing replay UI
-					player.seekTo(0, true);
-					player.pauseVideo();
+			events: {
+				onReady: function() {
+					isReady = true;
+					try { player.unloadModule('captions'); } catch(e) {}
+					// Immediately try to play
+					player.playVideo();
+					player.unMute();
+					player.setVolume(vol * 100);
+					hasPlayed = true;
+				},
+				onStateChange: function(e) {
+					if (e.data === YT.PlayerState.ENDED) {
+						player.seekTo(0, true);
+						player.pauseVideo();
+					}
+				},
+				onError: function(e) {
+					showError(YT_ERRORS[e.data] || 'Error loading video (code ' + e.data + ')');
 				}
-			},
-			onError: function(e) {
-				showError(YT_ERRORS[e.data] || 'Error loading video (code ' + e.data + ')');
+			}
+		});
+	}
+
+	// Hash-change command handler
+	window.addEventListener('hashchange', function() {
+		var p = getHashParams();
+		if (!p.v) return;
+
+		if (p.v !== currentVideoId) {
+			createPlayer(p.v, parseFloat(p.t) || 0, parseFloat(p.vol) || 0.5);
+			return;
+		}
+
+		if (!isReady || !player) return;
+
+		if (p.vol !== undefined) {
+			var vol = parseFloat(p.vol);
+			if (!isNaN(vol)) {
+				try {
+					if (player.isMuted()) player.unMute();
+					player.setVolume(vol * 100);
+				} catch(e) {}
 			}
 		}
-	});
-}
 
-// Hash-change command handler
-window.addEventListener('hashchange', function() {
-	var p = getHashParams();
-	if (!p.v) return;
+		switch (p.cmd) {
+			case 'pause':
+				try { player.pauseVideo(); } catch(e) {}
+				break;
+			case 'play':
+				try { player.playVideo(); } catch(e) {}
+				break;
+			case 'seek':
+				try { player.seekTo(parseFloat(p.t) || 0, true); } catch(e) {}
+				break;
+			case 'sync':
+				try {
+					var expected = parseFloat(p.t) || 0;
+					var current = player.getCurrentTime();
+					var diff = Math.abs(current - expected);
+					var threshold = (p.paused === '1') ? 2 : 5;
+					if (diff > threshold) player.seekTo(expected, true);
 
-	// New video
-	if (p.v !== currentVideoId) {
-		createPlayer(p.v, parseFloat(p.t) || 0, parseFloat(p.vol) || 0.5);
-		return;
-	}
-
-	if (!isReady || !player) return;
-
-	// Volume
-	if (p.vol !== undefined) {
-		var vol = parseFloat(p.vol);
-		if (!isNaN(vol)) {
-			try {
-				if (player.isMuted()) player.unMute();
-				player.setVolume(vol * 100);
-			} catch(e) {}
-		}
-	}
-
-	switch (p.cmd) {
-		case 'pause':
-			try { player.pauseVideo(); } catch(e) {}
-			break;
-		case 'play':
-			try { player.playVideo(); } catch(e) {}
-			break;
-		case 'seek':
-			try { player.seekTo(parseFloat(p.t) || 0, true); } catch(e) {}
-			break;
-		case 'sync':
-			try {
-				var expected = parseFloat(p.t) || 0;
-				var current = player.getCurrentTime();
-				var diff = Math.abs(current - expected);
-				var threshold = (p.paused === '1') ? 2 : 5;
-
-				if (diff > threshold) {
-					player.seekTo(expected, true);
-				}
-
-				var state = player.getPlayerState();
-				if (p.paused === '1') {
-					if (state === YT.PlayerState.PLAYING) player.pauseVideo();
-				} else {
-					if (state !== YT.PlayerState.PLAYING && state !== YT.PlayerState.BUFFERING) {
-						player.playVideo();
+					var state = player.getPlayerState();
+					if (p.paused === '1') {
+						if (state === 1) player.pauseVideo();
+					} else {
+						if (state !== 1 && state !== 3) player.playVideo();
 					}
-				}
-			} catch(e) {}
-			break;
-	}
-});
+				} catch(e) {}
+				break;
+		}
+	});
 
-if (window.YT && window.YT.Player && !player) {
-	if (document.readyState === 'complete') onYouTubeIframeAPIReady();
-	else window.addEventListener('load', onYouTubeIframeAPIReady);
-}
+	// Handle case where API was already loaded
+	if (window.YT && window.YT.Player && !player) {
+		if (document.readyState === 'complete') window.onYouTubeIframeAPIReady();
+		else window.addEventListener('load', window.onYouTubeIframeAPIReady);
+	}
+})();
 </script>
 </body>
 </html>
