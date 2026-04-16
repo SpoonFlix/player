@@ -6,9 +6,8 @@
     body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: monospace; }
     video { width: 100%; height: 100%; object-fit: contain; }
     
-    /* ── IN-GAME DEBUG OVERLAY ── */
     #debug-log {
-        position: absolute; top: 10px; left: 10px; width: 400px; max-height: 80%; 
+        position: absolute; top: 10px; left: 10px; width: 400px; max-height: 40%; 
         background: rgba(0,0,0,0.85); color: #fff; font-size: 12px; padding: 10px; 
         border-radius: 5px; overflow-y: auto; pointer-events: none; z-index: 9999;
         border: 1px solid #333;
@@ -19,90 +18,118 @@
     .log-info { color: #00BFFF; }
 
     #unmute-overlay { 
-        display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-        background: rgba(0,0,0,0.7); color: #fff; font-family: sans-serif; 
-        justify-content: center; align-items: center; z-index: 100; font-size: 24px; font-weight: bold;
+        display: flex; position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+        background: rgba(0,0,0,0.8); color: #fff; font-family: sans-serif; flex-direction: column;
+        justify-content: center; align-items: center; z-index: 100; font-size: 20px; text-align: center;
     }
 </style>
 </head>
 <body>
 <video id="vid" playsinline></video>
-<div id="unmute-overlay">Waiting for S&box UI Interaction...</div>
+<div id="unmute-overlay">
+    <h2 style="color: #0094ff; margin-bottom: 10px;">Media Loaded</h2>
+    <p>Adjust the volume slider in-game to enable audio.</p>
+</div>
 
 <div id="debug-log"></div>
 
 <script>
-    var vid = document.getElementById('vid');
-    var overlay = document.getElementById('unmute-overlay');
-    var debugDiv = document.getElementById('debug-log');
-    var currentVideoId = '';
+    const vid = document.getElementById('vid');
+    const overlay = document.getElementById('unmute-overlay');
+    const debugDiv = document.getElementById('debug-log');
+    let currentVideoId = '';
 
-    // ── DEBUG LOGGER ──
     function log(msg, type = 'info') {
-        var el = document.createElement('div');
+        const el = document.createElement('div');
         el.className = 'log-entry log-' + type;
         el.textContent = '[' + new Date().toISOString().substring(11, 19) + '] ' + msg;
         debugDiv.appendChild(el);
         debugDiv.scrollTop = debugDiv.scrollHeight;
     }
 
-    window.onerror = function(msg, url, line) { log("JS ERROR: " + msg + " (Line " + line + ")", 'err'); };
-
-    vid.addEventListener('error', function(e) {
-        var errCode = vid.error ? vid.error.code : 'Unknown';
-        var errMsg = vid.error ? vid.error.message : 'No message';
-        log("VIDEO FATAL ERROR (Code " + errCode + "): " + errMsg, 'err');
-    });
-
-    vid.addEventListener('loadstart', () => log("Video loadstart triggered..."));
-    vid.addEventListener('loadeddata', () => log("Video data loaded successfully.", 'info'));
-    vid.addEventListener('waiting', () => log("Video buffering..."));
-    vid.addEventListener('playing', () => log("Video is playing visually.", 'info'));
-
-    log("HTML Wrapper initialized and waiting for C# hashchange...", 'info');
-
-    // ── C# COMMUNICATION ──
-    window.addEventListener('hashchange', function() {
-        var h = window.location.hash.substring(1);
-        var p = new URLSearchParams(h);
+    // ── THE FRONTEND WATERFALL ──
+    // Because this runs in CEF, Cloudflare sees a real browser and allows the connection.
+    async function resolveRawUrl(videoId) {
+        const invidious = [
+            "https://vid.puffyan.us", "https://invidious.slipfox.xyz", 
+            "https://invidious.fdn.fr", "https://invidious.perennialte.ch"
+        ];
         
-        var vId = p.get('v');
-        var newUrl = p.get('url');
-        
-        if (vId && vId !== currentVideoId && newUrl) {
-            log("C# requested new video: " + vId);
-            
-            var decodedUrl = decodeURIComponent(newUrl);
-            log("Raw stream URL length: " + decodedUrl.length);
-            
-            currentVideoId = vId;
-            vid.src = decodedUrl;
-            vid.currentTime = parseFloat(p.get('t')) || 0;
-            vid.muted = true; 
-            
-            var playPromise = vid.play();
-            if (playPromise !== undefined) {
-                playPromise.then(_ => {
-                    vid.muted = false;
-                    if (vid.muted) overlay.style.display = 'flex'; 
-                }).catch(error => {
-                    log("Autoplay blocked by browser policy. Awaiting UI click.", 'warn');
-                    overlay.style.display = 'flex';
-                });
-            }
+        for (let inst of invidious) {
+            try {
+                log(`Trying Invidious: ${inst}...`);
+                let res = await fetch(`${inst}/api/v1/videos/${videoId}`);
+                if (!res.ok) continue;
+                let data = await res.json();
+                if (data.formatStreams) {
+                    for (let s of data.formatStreams) {
+                        if (s.url) { log(`Success! Stream found.`); return s.url; }
+                    }
+                }
+            } catch(e) { log(`Failed: ${inst}`, 'warn'); }
         }
 
-        var vol = p.get('vol');
+        const piped = [
+            "https://pipedapi.kavin.rocks", "https://pipedapi.smnz.de", 
+            "https://pipedapi.adminforge.de", "https://pipedapi.astartes.nl"
+        ];
+
+        for (let inst of piped) {
+            try {
+                log(`Trying Piped: ${inst}...`);
+                let res = await fetch(`${inst}/streams/${videoId}`);
+                if (!res.ok) continue;
+                let data = await res.json();
+                if (data.videoStreams) {
+                    for (let s of data.videoStreams) {
+                        if (!s.videoOnly && s.url) { log(`Success! Stream found.`); return s.url; }
+                    }
+                }
+            } catch(e) { log(`Failed: ${inst}`, 'warn'); }
+        }
+        return null;
+    }
+
+    window.addEventListener('hashchange', async function() {
+        const p = new URLSearchParams(window.location.hash.substring(1));
+        const vId = p.get('v');
+        
+        // ── LOAD NEW VIDEO ──
+        if (vId && vId !== currentVideoId) {
+            currentVideoId = vId;
+            log(`C# requested video: ${vId}`);
+            overlay.style.display = 'flex';
+            vid.src = ''; 
+            
+            let rawUrl = await resolveRawUrl(vId);
+            if (!rawUrl) {
+                log("FATAL: All proxies blocked the request.", 'err');
+                return;
+            }
+
+            vid.src = rawUrl;
+            vid.currentTime = parseFloat(p.get('t')) || 0;
+            
+            // Browsers strictly require the video to be muted on the first play
+            vid.muted = true; 
+            vid.play().catch(e => log("Autoplay prevented pending user interaction.", 'warn'));
+        }
+
+        // ── HANDLE VOLUME & UNMUTE ──
+        const vol = p.get('vol');
         if (vol !== null) {
             vid.volume = parseFloat(vol);
+            // When the user touches the S&box volume slider, the browser considers it an interaction
             if (vid.muted) {
                 vid.muted = false;
+                vid.play(); // Force play if it was blocked
                 overlay.style.display = 'none';
             }
         }
 
-        var cmd = p.get('cmd');
-        var t = parseFloat(p.get('t')) || 0;
+        // ── HANDLE SYNC (EVENT DRIVEN, NO STUTTER) ──
+        const cmd = p.get('cmd');
+        const t = parseFloat(p.get('t')) || 0;
         
         if (cmd === 'sync') {
             if (p.get('paused') === '1') {
@@ -110,14 +137,16 @@
                 if (Math.abs(vid.currentTime - t) > 0.5) vid.currentTime = t;
             } else {
                 if (vid.paused) vid.play();
+                // Forgiving 3-second drift to prevent stuttering
                 if (Math.abs(vid.currentTime - t) > 3) {
-                    log("Drift detected. Seeking to " + t, 'warn');
+                    log(`Drift > 3s. Seeking to ${t}`, 'warn');
                     vid.currentTime = t;
                 }
             }
-            if (!vid.muted) overlay.style.display = 'none';
         }
     });
+
+    log("HTML5 Native Player Ready.", 'info');
 </script>
 </body>
 </html>
