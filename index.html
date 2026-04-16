@@ -43,12 +43,13 @@ function createPlayer(videoId, startTime) {
 	unmuted = false;
 	currentVideoId = videoId;
 
-	// YT.Player replaces the target element, so recreate it
 	var container = document.getElementById('player-container');
 	container.innerHTML = '<div id="yt-player"></div>';
 	document.getElementById('error').className = '';
 
 	ytPlayer = new YT.Player('yt-player', {
+        // Nocookie host actively suppresses the vast majority of pre-roll ads
+        host: 'https://www.youtube-nocookie.com',
 		width: '100%',
 		height: '100%',
 		videoId: videoId,
@@ -78,11 +79,10 @@ function createPlayer(videoId, startTime) {
 // ── YT Callbacks ───────────────────────────────────────────
 function onPlayerReady(event) {
 	playerReady = true;
-	// Muted autoplay — allowed in all modern Chromium/CEF builds
 	event.target.mute();
 	event.target.playVideo();
 
-	// Staggered unmute attempts — the first one that catches PLAYING state wins
+	// Staggered unmute attempts. Chromium strictly requires playback to begin before unmuting.
 	setTimeout(tryUnmute, 500);
 	setTimeout(tryUnmute, 1500);
 	setTimeout(tryUnmute, 3000);
@@ -90,11 +90,9 @@ function onPlayerReady(event) {
 
 function onPlayerStateChange(event) {
 	if (event.data === YT.PlayerState.PLAYING) {
-		// Video is actually decoding frames — safe to unmute
 		tryUnmute();
 	}
 	if (event.data === YT.PlayerState.ENDED) {
-		// Let the C# auto-advance logic handle what's next
 		ytPlayer.seekTo(0, true);
 		ytPlayer.pauseVideo();
 	}
@@ -116,7 +114,7 @@ function tryUnmute() {
     if (!ytPlayer || !playerReady || unmuted) return;
     try {
         var state = ytPlayer.getPlayerState();
-        // ONLY unmute if it is actively playing frames
+        // NEVER unmute while buffering, Chrome will block the video playback entirely
         if (state === YT.PlayerState.PLAYING) { 
             ytPlayer.unMute();
             ytPlayer.setVolume(targetVolume);
@@ -130,7 +128,6 @@ window.addEventListener('hashchange', function() {
 	var p = getHashParams();
 	if (!p.v) return;
 
-	// ── New video ──
 	if (p.v !== currentVideoId) {
 		targetVolume = Math.round((parseFloat(p.vol) || 0.5) * 100);
 		if (playerReady && ytPlayer) {
@@ -148,7 +145,6 @@ window.addEventListener('hashchange', function() {
 
 	if (!ytPlayer || !playerReady) return;
 
-	// ── Volume ──
 	if (p.vol !== undefined) {
 		var vol = parseFloat(p.vol);
 		if (!isNaN(vol)) {
@@ -161,7 +157,6 @@ window.addEventListener('hashchange', function() {
 		}
 	}
 
-	// ── Commands ──
 	try {
 		switch (p.cmd) {
 			case 'pause':
@@ -176,19 +171,26 @@ window.addEventListener('hashchange', function() {
 			case 'sync':
 				if (p.paused === '1') {
 					ytPlayer.pauseVideo();
+                    var target = parseFloat(p.t) || 0;
+                    if (Math.abs(ytPlayer.getCurrentTime() - target) > 1) {
+                        ytPlayer.seekTo(target, true);
+                    }
 				} else {
 					var state = ytPlayer.getPlayerState();
 					if (state !== YT.PlayerState.PLAYING && state !== YT.PlayerState.BUFFERING) {
 						ytPlayer.playVideo();
 					}
-				}
-				// Only force-seek when drift exceeds threshold (5s playing, 2s paused)
-				var target = parseFloat(p.t) || 0;
-				var current = ytPlayer.getCurrentTime() || 0;
-				var drift = Math.abs(current - target);
-				var threshold = (p.paused === '1') ? 2 : 5;
-				if (drift > threshold) {
-					ytPlayer.seekTo(target, true);
+                    
+                    // ANTI-STUTTER LOGIC
+                    // We only force a seek if the video is currently playing and has drifted more than 3.5 seconds.
+                    // This allows natural buffering to resolve itself without the C# loop interupting it every 1 second.
+                    if (state === YT.PlayerState.PLAYING) {
+                        var target = parseFloat(p.t) || 0;
+                        var current = ytPlayer.getCurrentTime() || 0;
+                        if (Math.abs(current - target) > 3.5) {
+                            ytPlayer.seekTo(target, true);
+                        }
+                    }
 				}
 				break;
 		}
