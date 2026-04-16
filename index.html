@@ -64,6 +64,7 @@ function createPlayer(videoId, startTime) {
 			cc_load_policy: 0,
 			playsinline: 1,
 			enablejsapi: 1,
+			origin: window.location.origin,
 			start: Math.floor(startTime) || 0
 		},
 		events: {
@@ -112,15 +113,16 @@ function onPlayerError(event) {
 }
 
 function tryUnmute() {
-	if (!ytPlayer || !playerReady || unmuted) return;
-	try {
-		var state = ytPlayer.getPlayerState();
-		if (state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING) {
-			ytPlayer.unMute();
-			ytPlayer.setVolume(targetVolume);
-			unmuted = true;
-		}
-	} catch(e) {}
+    if (!ytPlayer || !playerReady || unmuted) return;
+    try {
+        var state = ytPlayer.getPlayerState();
+        // ONLY unmute if it is actively playing frames
+        if (state === YT.PlayerState.PLAYING) { 
+            ytPlayer.unMute();
+            ytPlayer.setVolume(targetVolume);
+            unmuted = true;
+        }
+    } catch(e) {}
 }
 
 // ── Hash-change handler (C# → JS communication) ───────────
