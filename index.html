@@ -14,7 +14,7 @@
         border: 1px solid #333;
     }
     .log-entry { margin-bottom: 4px; word-wrap: break-word; }
-    .log-err { color: #FF7F50; font-weight: bold; } /* Coral accent for visibility */
+    .log-err { color: #FF7F50; font-weight: bold; }
     .log-warn { color: #FFD700; }
     .log-info { color: #00BFFF; }
 
@@ -46,10 +46,8 @@
         debugDiv.scrollTop = debugDiv.scrollHeight;
     }
 
-    // Catch unhandled JS errors
     window.onerror = function(msg, url, line) { log("JS ERROR: " + msg + " (Line " + line + ")", 'err'); };
 
-    // Catch HTML5 Video playback/decoding errors
     vid.addEventListener('error', function(e) {
         var errCode = vid.error ? vid.error.code : 'Unknown';
         var errMsg = vid.error ? vid.error.message : 'No message';
