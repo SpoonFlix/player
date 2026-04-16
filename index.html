@@ -2,180 +2,83 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <style>
-	*{margin:0;padding:0}
-	html,body{width:100%;height:100%;overflow:hidden;background:#000}
-	#player-container{width:100vw;height:100vh}
-	#player-container iframe{width:100%!important;height:100%!important}
-	#error{display:none;position:fixed;top:0;left:0;width:100%;height:100%;
-		background:#111;color:#888;font-family:sans-serif;
-		justify-content:center;align-items:center;flex-direction:column;text-align:center;z-index:10}
-	#error.show{display:flex}
-	#error h2{color:#ccc;margin-bottom:8px}
+    body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    video { width: 100%; height: 100%; object-fit: contain; }
+    #unmute-overlay { 
+        display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+        background: rgba(0,0,0,0.7); color: #fff; font-family: sans-serif; 
+        justify-content: center; align-items: center; z-index: 100; font-size: 24px; font-weight: bold;
+    }
 </style>
 </head>
 <body>
-<div id="player-container"><div id="yt-player"></div></div>
-<div id="error"><h2>Video Unavailable</h2><p id="error-msg"></p></div>
+<video id="vid" playsinline></video>
+<div id="unmute-overlay">Waiting for S&box UI Interaction...</div>
 
 <script>
-var ytPlayer      = null;
-var currentVideoId = '';
-var targetVolume  = 50;      
-var apiReady      = false;
-var playerReady   = false;
-var unmuted       = false;
+    var vid = document.getElementById('vid');
+    var overlay = document.getElementById('unmute-overlay');
+    var currentVideoId = '';
 
-function getHashParams() {
-	var h = window.location.hash.substring(1);
-	if (!h) return {};
-	var p = {};
-	new URLSearchParams(h).forEach(function(v, k) { p[k] = v; });
-	return p;
-}
-
-function createPlayer(videoId, startTime) {
-	if (ytPlayer) { try { ytPlayer.destroy(); } catch(e){} ytPlayer = null; }
-	playerReady = false;
-	unmuted = false;
-	currentVideoId = videoId;
-
-	var container = document.getElementById('player-container');
-	container.innerHTML = '<div id="yt-player"></div>';
-	document.getElementById('error').className = '';
-
-	ytPlayer = new YT.Player('yt-player', {
-        // Blocks Ads
-        host: 'https://www.youtube-nocookie.com',
-		width: '100%',
-		height: '100%',
-		videoId: videoId,
-		playerVars: {
-			autoplay: 1,
-			mute: 1, // MUST be 1 to bypass CEF first-play blocks
-			controls: 0,
-			disablekb: 1,
-			modestbranding: 1,
-			rel: 0,
-			showinfo: 0,
-			iv_load_policy: 3,
-			cc_load_policy: 0,
-			playsinline: 1,
-			enablejsapi: 1,
-			origin: window.location.origin,
-			start: Math.floor(startTime) || 0
-		},
-		events: {
-			onReady: onPlayerReady,
-			onStateChange: onPlayerStateChange,
-			onError: onPlayerError
-		}
-	});
-}
-
-function onPlayerReady(event) {
-	playerReady = true;
-	event.target.mute();
-	event.target.playVideo();
-}
-
-function onPlayerStateChange(event) {
-	if (event.data === YT.PlayerState.PLAYING) {
-		tryUnmute();
-	}
-	if (event.data === YT.PlayerState.ENDED) {
-		ytPlayer.seekTo(0, true);
-		ytPlayer.pauseVideo();
-	}
-}
-
-function onPlayerError(event) {
-	var errors = { 2: 'Invalid ID', 5: 'HTML5 Error', 100: 'Not found', 101: 'Embed blocked', 150: 'Embed blocked' };
-	document.getElementById('error-msg').textContent = errors[event.data] || 'Error ' + event.data;
-	document.getElementById('error').className = 'show';
-}
-
-function tryUnmute() {
-    if (!ytPlayer || !playerReady || unmuted) return;
-    try {
-        var state = ytPlayer.getPlayerState();
-        if (state === YT.PlayerState.PLAYING) { 
-            ytPlayer.unMute();
-            ytPlayer.setVolume(targetVolume);
-            unmuted = true;
-        } else if (state === YT.PlayerState.UNSTARTED || state === YT.PlayerState.CUED) {
-            // Aggressively kick the player if it's stuck on the red play button
-            ytPlayer.mute();
-            ytPlayer.playVideo();
+    window.addEventListener('hashchange', function() {
+        var h = window.location.hash.substring(1);
+        var p = new URLSearchParams(h);
+        
+        var vId = p.get('v');
+        var newUrl = p.get('url');
+        
+        // ── LOAD NEW VIDEO ──
+        if (vId && vId !== currentVideoId && newUrl) {
+            currentVideoId = vId;
+            vid.src = decodeURIComponent(newUrl);
+            vid.currentTime = parseFloat(p.get('t')) || 0;
+            
+            // Chromium requires videos to be muted to autoplay
+            vid.muted = true; 
+            var playPromise = vid.play();
+            
+            if (playPromise !== undefined) {
+                playPromise.then(_ => {
+                    // Try to unmute once frames are moving
+                    vid.muted = false;
+                    if (vid.muted) overlay.style.display = 'flex'; 
+                }).catch(error => {
+                    overlay.style.display = 'flex';
+                });
+            }
         }
-    } catch(e) {}
-}
 
-// Check every 500ms if the video is stuck on the first load
-setInterval(function() {
-    if (ytPlayer && playerReady && currentVideoId && !unmuted) {
-        tryUnmute();
-    }
-}, 500);
+        // ── HANDLE VOLUME ──
+        var vol = p.get('vol');
+        if (vol !== null) {
+            vid.volume = parseFloat(vol);
+            // If C# sends a volume command (user adjusted slider), the browser considers
+            // this an interaction and will finally allow us to unmute.
+            if (vid.muted) {
+                vid.muted = false;
+                overlay.style.display = 'none';
+            }
+        }
 
-window.addEventListener('hashchange', function() {
-	var p = getHashParams();
-	if (!p.v) return;
-
-	if (p.v !== currentVideoId) {
-		targetVolume = Math.round((parseFloat(p.vol) || 0.5) * 100);
-		if (playerReady && ytPlayer) {
-			currentVideoId = p.v;
-			unmuted = false;
-            ytPlayer.mute(); // Mute before loading to prevent CEF block
-			ytPlayer.loadVideoById({ videoId: p.v, startSeconds: parseFloat(p.t) || 0 });
-		} else {
-			createPlayer(p.v, parseFloat(p.t) || 0);
-		}
-		return;
-	}
-
-	if (!ytPlayer || !playerReady) return;
-
-	if (p.vol !== undefined) {
-		var vol = parseFloat(p.vol);
-		if (!isNaN(vol)) {
-			targetVolume = Math.round(vol * 100);
-			try {
-				ytPlayer.unMute();
-				ytPlayer.setVolume(targetVolume);
-				unmuted = true;
-			} catch(e) {}
-		}
-	}
-
-	try {
-		switch (p.cmd) {
-			case 'sync':
-                // Event-Driven Sync: We ONLY get this command when the Host actually pauses or seeks.
-				if (p.paused === '1') {
-					ytPlayer.pauseVideo();
-                    ytPlayer.seekTo(parseFloat(p.t) || 0, true);
-				} else {
-					ytPlayer.playVideo();
-                    ytPlayer.seekTo(parseFloat(p.t) || 0, true);
-				}
-				break;
-		}
-	} catch(e) {}
-});
-
-var initParams = getHashParams();
-if (initParams.vol) targetVolume = Math.round((parseFloat(initParams.vol) || 0.5) * 100);
-
-window.onYouTubeIframeAPIReady = function() {
-	apiReady = true;
-	if (initParams.v) {
-		createPlayer(initParams.v, parseFloat(initParams.t) || 0);
-	}
-};
+        // ── HANDLE SYNC ──
+        var cmd = p.get('cmd');
+        var t = parseFloat(p.get('t')) || 0;
+        
+        if (cmd === 'sync') {
+            if (p.get('paused') === '1') {
+                vid.pause();
+                if (Math.abs(vid.currentTime - t) > 0.5) vid.currentTime = t;
+            } else {
+                if (vid.paused) vid.play();
+                // Anti-stutter: Only force a seek if the video has drifted more than 3 seconds
+                if (Math.abs(vid.currentTime - t) > 3) vid.currentTime = t;
+            }
+            
+            // Clear overlay if audio successfully activated
+            if (!vid.muted) overlay.style.display = 'none';
+        }
+    });
 </script>
-<script src="https://www.youtube.com/iframe_api"></script>
 </body>
 </html>
