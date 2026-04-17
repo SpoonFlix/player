@@ -1,40 +1,134 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <title>Media Player - Request</title>
-    <meta name="description" content="Garry's Mod Media Player request page.">
-    <meta name="keywords" content="garrysmod,media,player,request,search,youtube,vimeo,twitch,livestream,blip,reddit">
-    <meta name="author" content="pixelTail Games">
-    <link rel="stylesheet" href="styles/request.css">
+    <meta name="description" content="Media Player request page.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css?family=Oswald:400,500&display=swap" rel="stylesheet">
+    
+    <style>
+        /* Base Page Styling */
+        body {
+            background-color: #121212;
+            color: #ffffff;
+            font-family: 'Oswald', sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+
+        /* Center Container */
+        .content-container {
+            background-color: #1e1e1e;
+            padding: 40px 50px;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            max-width: 600px;
+            width: 100%;
+        }
+
+        h1 {
+            font-weight: 400;
+            font-size: 1.8rem;
+            margin-bottom: 30px;
+            color: #e0e0e0;
+        }
+
+        /* Services Flexbox Layout */
+        .services {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-bottom: 40px;
+            flex-wrap: wrap;
+        }
+
+        /* Individual Service Buttons */
+        .media-service {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 140px;
+            height: 60px;
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            text-decoration: none;
+            color: white;
+            font-size: 1.2rem;
+            letter-spacing: 1px;
+            transition: all 0.2s ease-in-out;
+            cursor: pointer;
+        }
+
+        /* Hover Effects with Brand Colors */
+        .media-service:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        .logo-youtube:hover {
+            background-color: #FF0000;
+        }
+
+        .logo-twitch:hover {
+            background-color: #9146FF;
+        }
+
+        .logo-soundcloud:hover {
+            background-color: #FF5500;
+        }
+
+        /* Footer Links */
+        .footer-links {
+            border-top: 1px solid #333;
+            padding-top: 20px;
+        }
+
+        .footer-links a {
+            color: #888;
+            text-decoration: none;
+            margin: 0 15px;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+
+        .footer-links a:hover {
+            color: #ffffff;
+        }
+    </style>
 </head>
 <body>
-    <div style="position:absolute;top:0;left:0;right:0;bottom:0">
-        <section class="content-container">
-            
-            <h1>Share media from one of the selected services</h1>
-            
-            <div class="services">
-                <!-- YouTube -->
-                <span class="media-service logo-youtube" data-href="http://www.youtube.com/" data-name="YouTube" data-service="yt" onclick="selectService(this)" onmouseover="hoverService()">&nbsp;</span> 
-                
-                <!-- Twitch -->
-                <span class="media-service subtext logo-twitch" data-href="http://www.twitch.tv/" data-name="Twitch" data-service="twv twl" onclick="selectService(this)" onmouseover="hoverService()">&nbsp;</span> 
-                
-                <!-- SoundCloud -->
-                <span class="media-service subtext logo-soundcloud" data-href="http://soundcloud.com/search" data-name="SoundCloud" data-overlay="true" data-service="sc" onclick="selectService(this)" onmouseover="hoverService()">&nbsp;</span> 
-            </div>
 
-            <!-- Footer Links -->
-            <div class="url-container">
-                <a href="./tos.html">Terms of Service</a>&nbsp; 
-                <a href="./privacy.html">Privacy Policy</a>
-            </div>
+    <div class="content-container">
+        <h1>Share media from one of the selected services</h1>
+        
+        <div class="services">
+            <!-- YouTube -->
+            <a href="http://www.youtube.com/" target="_blank" class="media-service logo-youtube">
+                YouTube
+            </a> 
             
-        </section>
+            <!-- Twitch -->
+            <a href="http://www.twitch.tv/" target="_blank" class="media-service logo-twitch">
+                Twitch
+            </a> 
+            
+            <!-- SoundCloud -->
+            <a href="http://soundcloud.com/search" target="_blank" class="media-service logo-soundcloud">
+                SoundCloud
+            </a> 
+        </div>
+
+        <!-- Footer Links -->
+        <div class="footer-links">
+            <a href="#">Terms of Service</a>
+            <a href="#">Privacy Policy</a>
+        </div>
     </div>
-    
-    <link href="https://fonts.googleapis.com/css?family=Oswald" rel="stylesheet">
-    <script src="scripts/request.js"></script>
+
 </body>
 </html>
