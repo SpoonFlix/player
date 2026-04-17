@@ -1,152 +1,40 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8" />
-<style>
-    body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: monospace; }
-    video { width: 100%; height: 100%; object-fit: contain; }
-    
-    #debug-log {
-        position: absolute; top: 10px; left: 10px; width: 400px; max-height: 40%; 
-        background: rgba(0,0,0,0.85); color: #fff; font-size: 12px; padding: 10px; 
-        border-radius: 5px; overflow-y: auto; pointer-events: none; z-index: 9999;
-        border: 1px solid #333;
-    }
-    .log-entry { margin-bottom: 4px; word-wrap: break-word; }
-    .log-err { color: #FF7F50; font-weight: bold; }
-    .log-warn { color: #FFD700; }
-    .log-info { color: #00BFFF; }
-
-    #unmute-overlay { 
-        display: flex; position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-        background: rgba(0,0,0,0.8); color: #fff; font-family: sans-serif; flex-direction: column;
-        justify-content: center; align-items: center; z-index: 100; font-size: 20px; text-align: center;
-    }
-</style>
+    <meta charset="utf-8">
+    <title>Media Player - Request</title>
+    <meta name="description" content="Garry's Mod Media Player request page.">
+    <meta name="keywords" content="garrysmod,media,player,request,search,youtube,vimeo,twitch,livestream,blip,reddit">
+    <meta name="author" content="pixelTail Games">
+    <link rel="stylesheet" href="styles/request.css">
 </head>
 <body>
-<video id="vid" playsinline></video>
-<div id="unmute-overlay">
-    <h2 style="color: #0094ff; margin-bottom: 10px;">Media Loaded</h2>
-    <p>Adjust the volume slider in-game to enable audio.</p>
-</div>
-
-<div id="debug-log"></div>
-
-<script>
-    const vid = document.getElementById('vid');
-    const overlay = document.getElementById('unmute-overlay');
-    const debugDiv = document.getElementById('debug-log');
-    let currentVideoId = '';
-
-    function log(msg, type = 'info') {
-        const el = document.createElement('div');
-        el.className = 'log-entry log-' + type;
-        el.textContent = '[' + new Date().toISOString().substring(11, 19) + '] ' + msg;
-        debugDiv.appendChild(el);
-        debugDiv.scrollTop = debugDiv.scrollHeight;
-    }
-
-    // ── THE FRONTEND WATERFALL ──
-    // Because this runs in CEF, Cloudflare sees a real browser and allows the connection.
-    async function resolveRawUrl(videoId) {
-        const invidious = [
-            "https://vid.puffyan.us", "https://invidious.slipfox.xyz", 
-            "https://invidious.fdn.fr", "https://invidious.perennialte.ch"
-        ];
-        
-        for (let inst of invidious) {
-            try {
-                log(`Trying Invidious: ${inst}...`);
-                let res = await fetch(`${inst}/api/v1/videos/${videoId}`);
-                if (!res.ok) continue;
-                let data = await res.json();
-                if (data.formatStreams) {
-                    for (let s of data.formatStreams) {
-                        if (s.url) { log(`Success! Stream found.`); return s.url; }
-                    }
-                }
-            } catch(e) { log(`Failed: ${inst}`, 'warn'); }
-        }
-
-        const piped = [
-            "https://pipedapi.kavin.rocks", "https://pipedapi.smnz.de", 
-            "https://pipedapi.adminforge.de", "https://pipedapi.astartes.nl"
-        ];
-
-        for (let inst of piped) {
-            try {
-                log(`Trying Piped: ${inst}...`);
-                let res = await fetch(`${inst}/streams/${videoId}`);
-                if (!res.ok) continue;
-                let data = await res.json();
-                if (data.videoStreams) {
-                    for (let s of data.videoStreams) {
-                        if (!s.videoOnly && s.url) { log(`Success! Stream found.`); return s.url; }
-                    }
-                }
-            } catch(e) { log(`Failed: ${inst}`, 'warn'); }
-        }
-        return null;
-    }
-
-    window.addEventListener('hashchange', async function() {
-        const p = new URLSearchParams(window.location.hash.substring(1));
-        const vId = p.get('v');
-        
-        // ── LOAD NEW VIDEO ──
-        if (vId && vId !== currentVideoId) {
-            currentVideoId = vId;
-            log(`C# requested video: ${vId}`);
-            overlay.style.display = 'flex';
-            vid.src = ''; 
+    <div style="position:absolute;top:0;left:0;right:0;bottom:0">
+        <section class="content-container">
             
-            let rawUrl = await resolveRawUrl(vId);
-            if (!rawUrl) {
-                log("FATAL: All proxies blocked the request.", 'err');
-                return;
-            }
-
-            vid.src = rawUrl;
-            vid.currentTime = parseFloat(p.get('t')) || 0;
+            <h1>Share media from one of the selected services</h1>
             
-            // Browsers strictly require the video to be muted on the first play
-            vid.muted = true; 
-            vid.play().catch(e => log("Autoplay prevented pending user interaction.", 'warn'));
-        }
+            <div class="services">
+                <!-- YouTube -->
+                <span class="media-service logo-youtube" data-href="http://www.youtube.com/" data-name="YouTube" data-service="yt" onclick="selectService(this)" onmouseover="hoverService()">&nbsp;</span> 
+                
+                <!-- Twitch -->
+                <span class="media-service subtext logo-twitch" data-href="http://www.twitch.tv/" data-name="Twitch" data-service="twv twl" onclick="selectService(this)" onmouseover="hoverService()">&nbsp;</span> 
+                
+                <!-- SoundCloud -->
+                <span class="media-service subtext logo-soundcloud" data-href="http://soundcloud.com/search" data-name="SoundCloud" data-overlay="true" data-service="sc" onclick="selectService(this)" onmouseover="hoverService()">&nbsp;</span> 
+            </div>
 
-        // ── HANDLE VOLUME & UNMUTE ──
-        const vol = p.get('vol');
-        if (vol !== null) {
-            vid.volume = parseFloat(vol);
-            // When the user touches the S&box volume slider, the browser considers it an interaction
-            if (vid.muted) {
-                vid.muted = false;
-                vid.play(); // Force play if it was blocked
-                overlay.style.display = 'none';
-            }
-        }
-
-        // ── HANDLE SYNC (EVENT DRIVEN, NO STUTTER) ──
-        const cmd = p.get('cmd');
-        const t = parseFloat(p.get('t')) || 0;
-        
-        if (cmd === 'sync') {
-            if (p.get('paused') === '1') {
-                vid.pause();
-                if (Math.abs(vid.currentTime - t) > 0.5) vid.currentTime = t;
-            } else {
-                if (vid.paused) vid.play();
-                // Forgiving 3-second drift to prevent stuttering
-                if (Math.abs(vid.currentTime - t) > 3) {
-                    log(`Drift > 3s. Seeking to ${t}`, 'warn');
-                    vid.currentTime = t;
-                }
-            }
-        }
-    });
-
-    log("HTML5 Native Player Ready.", 'info');
-</script>
+            <!-- Footer Links -->
+            <div class="url-container">
+                <a href="./tos.html">Terms of Service</a>&nbsp; 
+                <a href="./privacy.html">Privacy Policy</a>
+            </div>
+            
+        </section>
+    </div>
+    
+    <link href="https://fonts.googleapis.com/css?family=Oswald" rel="stylesheet">
+    <script src="scripts/request.js"></script>
 </body>
 </html>
