@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+	<title>S&box Media Player</title>
+	<style>
+		html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: radial-gradient(circle, #333 0%, #161616 100%); }
+		#player, #scplayer, video, iframe { width: 100%; height: 100%; border: 0; display: block; background: #000; }
+		#player { pointer-events: none; }
+		.status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 700 20px system-ui, sans-serif; color: rgba(255,255,255,0.55); letter-spacing: 0.04em; }
+	</style>
+</head>
+<body>
+	<div id="player"><div class="status">MEDIA PLAYER</div></div>
+	<script>
+		const params = new URLSearchParams(window.location.search);
+		const root = document.getElementById("player");
+		const state = {
+			service: params.get("tp") || "idle",
+			id: params.get("dt") || "",
+			start: clampNumber(params.get("st"), 0, 999999, 0),
+			volume: clampNumber(params.get("vol"), 0, 100, 50),
+			paused: params.get("paused") === "1",
+			ready: false,
+			player: null,
+			videoEl: null
+		};
+
+		function clampNumber(value, min, max, fallback) {
+			const parsed = Number(value);
+			if (!Number.isFinite(parsed)) return fallback;
+			return Math.max(min, Math.min(max, parsed));
+		}
+
+		function clearPlayer() {
+			root.innerHTML = "";
+			state.ready = false;
+			state.player = null;
+			state.videoEl = null;
+		}
+
+		function showStatus(text) {
+			clearPlayer();
+			const div = document.createElement("div");
+			div.className = "status";
+			div.textContent = text;
+			root.appendChild(div);
+		}
+
+		function loadScript(src) {
+			return new Promise((resolve, reject) => {
+				const existing = [...document.scripts].find(script => script.src === src);
+				if (existing) {
+					resolve();
+					return;
+				}
+
+				const script = document.createElement("script");
+				script.src = src;
+				script.async = true;
+				script.onload = resolve;
+				script.onerror = reject;
+				document.head.appendChild(script);
+			});
+		}
+
+		function loadYouTubeApi() {
+			if (window.YT && window.YT.Player) return Promise.resolve();
+
+			return new Promise((resolve, reject) => {
+				window.onYouTubeIframeAPIReady = () => resolve();
+				loadScript("https://www.youtube.com/iframe_api").catch(reject);
+			});
+		}
+
+		function secondsToTwitchTime(seconds) {
+			seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+			const h = Math.floor(seconds / 3600);
+			const m = Math.floor((seconds % 3600) / 60);
+			const s = seconds % 60;
+			return `${h}h${m}m${s}s`;
+		}
+
+		function markReady() {
+			state.ready = true;
+			applyVolume(state.volume);
+			if (state.start > 0) seekTo(state.start);
+			setPaused(state.paused);
+		}
+
+		function markEnded() {
+			window.location.hash = `ended=1&nonce=${Date.now()}`;
+		}
+
+		async function loadYouTube() {
+			clearPlayer();
+			await loadYouTubeApi();
+
+			state.player = new YT.Player("player", {
+				height: "100%",
+				width: "100%",
+				videoId: state.id,
+				playerVars: {
+					autoplay: 1,
+					controls: 0,
+					cc_load_policy: 0,
+					rel: 0,
+					iv_load_policy: 3,
+					disablekb: 1,
+					playsinline: 1,
+					enablejsapi: 1,
+					origin: window.location.origin
+				},
+				events: {
+					onReady: () => {
+						state.player.playVideo();
+						markReady();
+					},
+					onStateChange: event => {
+						if (event.data === YT.PlayerState.ENDED) markEnded();
+					}
+				}
+			});
+		}
+
+		async function loadTwitch() {
+			clearPlayer();
+			await loadScript("https://player.twitch.tv/js/embed/v1.js");
+
+			const options = {
+				height: "100%",
+				width: "100%",
+				autoplay: true,
+				muted: false
+			};
+
+			if (window.location.hostname) {
+				options.parent = [window.location.hostname];
+			}
+
+			if (state.service === "tw") {
+				let vodId = state.id.startsWith("vid,") ? state.id.split(",")[1] : state.id;
+				if (!vodId.startsWith("v")) vodId = `v${vodId}`;
+				options.video = vodId;
+				options.time = secondsToTwitchTime(state.start);
+			} else {
+				options.channel = state.id;
+			}
+
+			state.player = new Twitch.Player("player", options);
+			state.player.addEventListener(Twitch.Player.READY, () => markReady());
+			if (Twitch.Player.ENDED) state.player.addEventListener(Twitch.Player.ENDED, () => markEnded());
+		}
+
+		async function loadSoundCloud() {
+			clearPlayer();
+			await loadScript("https://w.soundcloud.com/player/api.js");
+
+			const iframe = document.createElement("iframe");
+			iframe.id = "scplayer";
+			iframe.allow = "autoplay";
+			iframe.src = "https://w.soundcloud.com/player/?" + new URLSearchParams({
+				url: state.id,
+				color: "#ff3366",
+				auto_play: "true",
+				show_artwork: "true",
+				visual: "true"
+			}).toString();
+
+			root.appendChild(iframe);
+			state.player = SC.Widget(iframe);
+			state.player.bind(SC.Widget.Events.READY, () => markReady());
+			state.player.bind(SC.Widget.Events.FINISH, () => markEnded());
+		}
+
+		function loadDirect() {
+			clearPlayer();
+
+			const video = document.createElement("video");
+			video.src = state.id;
+			video.autoplay = true;
+			video.controls = false;
+			video.playsInline = true;
+			video.preload = "auto";
+			video.addEventListener("loadedmetadata", () => markReady(), { once: true });
+			video.addEventListener("ended", () => markEnded());
+			video.addEventListener("canplay", () => video.play().catch(() => {}));
+
+			root.appendChild(video);
+			state.videoEl = video;
+			state.player = video;
+		}
+
+		function applyVolume(volume) {
+			state.volume = clampNumber(volume, 0, 100, state.volume);
+			if (!state.ready && !state.player && !state.videoEl) return;
+
+			if (state.service === "yt" && state.player?.setVolume) {
+				state.player.setVolume(state.volume);
+				if (state.volume > 0 && state.player.unMute) state.player.unMute();
+				return;
+			}
+
+			if ((state.service === "tw" || state.service === "twl") && state.player?.setVolume) {
+				state.player.setVolume(state.volume / 100);
+				return;
+			}
+
+			if (state.service === "sc" && state.player?.setVolume) {
+				state.player.setVolume(state.volume);
+				return;
+			}
+
+			if (state.service === "dr" && state.videoEl) state.videoEl.volume = state.volume / 100;
+		}
+
+		function seekTo(seconds) {
+			const target = clampNumber(seconds, 0, 999999, 0);
+			state.start = target;
+			if (!state.ready && !state.player && !state.videoEl) return;
+
+			if (state.service === "yt" && state.player?.seekTo) {
+				state.player.seekTo(target, true);
+				return;
+			}
+
+			if (state.service === "tw" && state.player?.seek) {
+				state.player.seek(target);
+				return;
+			}
+
+			if (state.service === "sc" && state.player?.seekTo) {
+				state.player.seekTo(target * 1000);
+				return;
+			}
+
+			if (state.service === "dr" && state.videoEl) state.videoEl.currentTime = target;
+		}
+
+		function setPaused(paused) {
+			state.paused = Boolean(paused);
+			if (!state.ready && !state.player && !state.videoEl) return;
+
+			if (state.service === "yt") {
+				if (state.paused && state.player?.pauseVideo) state.player.pauseVideo();
+				if (!state.paused && state.player?.playVideo) state.player.playVideo();
+				return;
+			}
+
+			if (state.service === "tw" || state.service === "twl") {
+				if (state.paused && state.player?.pause) state.player.pause();
+				if (!state.paused && state.player?.play) state.player.play();
+				return;
+			}
+
+			if (state.service === "sc") {
+				if (state.paused && state.player?.pause) state.player.pause();
+				if (!state.paused && state.player?.play) state.player.play();
+				return;
+			}
+
+			if (state.service === "dr" && state.videoEl) {
+				if (state.paused) state.videoEl.pause();
+				else state.videoEl.play().catch(() => {});
+			}
+		}
+
+		function applyHashCommand() {
+			const raw = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+			if (!raw) return;
+
+			const hash = new URLSearchParams(raw);
+			if (hash.has("vol")) applyVolume(hash.get("vol"));
+			if (hash.has("seek")) seekTo(hash.get("seek"));
+			if (hash.has("paused")) setPaused(hash.get("paused") === "1");
+		}
+
+		window.SboxMedia = {
+			setVolume: applyVolume,
+			seekTo,
+			setPaused,
+			sync: next => {
+				if (!next || typeof next !== "object") return;
+				if (Object.prototype.hasOwnProperty.call(next, "volume")) applyVolume(next.volume);
+				if (Object.prototype.hasOwnProperty.call(next, "seek")) seekTo(next.seek);
+				if (Object.prototype.hasOwnProperty.call(next, "paused")) setPaused(next.paused);
+			}
+		};
+
+		window.addEventListener("hashchange", applyHashCommand);
+
+		(async function boot() {
+			try {
+				if (state.service === "yt") await loadYouTube();
+				else if (state.service === "tw" || state.service === "twl") await loadTwitch();
+				else if (state.service === "sc") await loadSoundCloud();
+				else if (state.service === "dr") loadDirect();
+				else showStatus("MEDIA PLAYER");
+
+				applyHashCommand();
+			} catch (err) {
+				console.error(err);
+				showStatus("PLAYER ERROR");
+			}
+		})();
+	</script>
+</body>
+</html>
